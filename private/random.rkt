@@ -1,4 +1,4 @@
-#lang racket/base
+#lang typed/racket/base
 
 ; This is a purely functional random generator, based on Lennart
 ; Augustsson's generator shipped with Hugs.
@@ -13,105 +13,112 @@
 ; implementation of SRFI 27, but much faster for applications that
 ; need a pure random-number generator with a `split' operation.
 
-(provide make-random-generator
+(provide Random-Generator
+         (rename-out [make-random-generator random-generator])
          random-generator?
 	 random-generator-next
 	 random-generator-split
 	 random-integer
-	 random-real
-         random-stream)
+	 random-real)
 
-(require racket/stream)
+(require racket/fixnum)
 
-(struct random-generator (s1 s2) #:constructor-name really-make-random-generator)
+(define-type Random-Generator random-generator)
 
-(define min-bound (- (expt 2 31)))
-(define max-bound (- (expt 2 31) 1))
-(define int-range (- max-bound min-bound))
+(struct random-generator ([s1 : Fixnum]
+                          [s2 : Fixnum]))
 
+(: min-bound Fixnum)
+(define min-bound (fx- 0 (fxlshift 1 31)))
+
+(: min-bound Fixnum)
+(define max-bound (fx- (fxlshift 1 31) 1))
+
+(: int-range Fixnum)
+(define int-range (fx- max-bound min-bound))
+
+(: make-random-generator (Fixnum → Random-Generator))
 (define (make-random-generator s)
-  (if (negative? s)
-      (make-random-generator (- s))
-      (let ((q (quotient s 2147483562))
-	    (s1 (remainder s 2147483562)))
-	(let ((s2 (remainder q 2147483398)))
-	  (really-make-random-generator (+ 1 s1) (+ 1 s2))))))
+  (if (fx< s 0)
+      (make-random-generator (fx- 0 #{s :: Fixnum}))
+      (let ((q (fxquotient s 2147483562))
+	    (s1 (fxremainder s 2147483562)))
+	(let ((s2 (fxremainder q 2147483398)))
+	  (random-generator (fx+ 1 s1) (fx+ 1 s2))))))
 
+(: random-generator-next (Random-Generator → (Values Fixnum Random-Generator)))
 (define (random-generator-next rg)
   (let ((s1 (random-generator-s1 rg))
 	(s2 (random-generator-s2 rg)))
 
-    (let ((k (quotient s1 53668))
-	  (k* (quotient s2 52774)))
-      (let ((s1*  (- (* 40014 (- s1 (* k 53668)))
-		     (* k 12211)))
-	    (s2* (- (* 40692 (- s2 (* k* 52774)))
-		    (* k* 3791))))
+    (let ([k (fxquotient s1 53668)]
+	  [k* (fxquotient s2 52774)])
+      (let ((s1*  (fx- (fx* 40014 (fx- s1 (fx* k 53668)))
+		     (fx* k 12211)))
+	    (s2* (fx- (fx* 40692 (fx- s2 (fx* k* 52774)))
+		    (fx* k* 3791))))
 	(let ((s1** (if (negative? s1*)
-			(+ s1* 2147483563)
+			(fx+ s1* 2147483563)
 			s1*))
 	      (s2** (if (negative? s2*)
-			(+ s2* 2147483399)
+			(fx+ s2* 2147483399)
 			s2*)))
-	  (let* ((z (- s1** s2**))
-		 (z* (if (< z 1)
-			 (+ z 2147483562)
+	  (let* ((z (fx- s1** s2**))
+		 (z* (if (fx< z 1)
+			 (fx+ z 2147483562)
 			 z)))
-	    (values z* (really-make-random-generator s1** s2**))))))))
+	    (values z* (random-generator s1** s2**))))))))
 
+
+(: random-generator-split (Random-Generator → (Values Random-Generator Random-Generator)))
 (define (random-generator-split rg)
   (let ((s1 (random-generator-s1 rg))
 	(s2 (random-generator-s2 rg)))
-    (let ((new-s1 (if (= s1 2147483562)
+    (let ((new-s1 (if (fx= s1 2147483562)
 		      1
-		      (+ s1 1)))
-	  (new-s2 (if (= s2 1)
-		      2147483398
-		      (- s2 1))))
+		      (fx+ s1 1)))
+	  (new-s2 (if (fx= s2 1)
+		      (assert 2147483398 fixnum?)
+		      (fx- s2 1))))
       (call-with-values
 	  (lambda ()
 	    (random-generator-next rg))
-	(lambda (_ nrg)
-	  (values (really-make-random-generator new-s1
-						(random-generator-s2 nrg))
-		  (really-make-random-generator (random-generator-s1 nrg)
-						new-s2)))))))
+	(lambda (_ [nrg : Random-Generator])
+          (values (random-generator new-s1
+                                    (random-generator-s2 nrg))
+                  (random-generator (random-generator-s1 nrg)
+                                    new-s2)))))))
 
 ; The intervals are inclusive.
 
+(: random-integer (Random-Generator Integer Integer → (Values Integer Random-Generator)))
 (define (random-integer rg low high)
-  (let ((b 2147483561)
-	(k (+ (- high low) 1)))
-    (let loop ((n (ilogbase b k))
-	       (acc low)
-	       (rg rg))
+  (let ([b 2147483561]
+        [k : Positive-Integer (+ (assert (- high low) exact-nonnegative-integer?) 1)])
+    (let loop : (Values Integer Random-Generator) ([n : Nonnegative-Integer (ilogbase b k)]
+                                                   [acc low]
+                                                   [rg rg])
       (if (zero? n)
 	  (values (+ low (modulo acc k))
 		  rg)
 	  (call-with-values
 	      (lambda () (random-generator-next rg))
-	    (lambda (x rgn)
+	    (lambda ([x : Fixnum] [rgn : Random-Generator])
 	      (loop (- n 1) (+ x (* acc b)) rgn)))))))
 
+(: random-real (Random-Generator Real Real → (Values Real Random-Generator)))
 (define (random-real rg low high)
   (call-with-values
       (lambda ()
 	(random-integer rg min-bound max-bound))
-    (lambda (x nrg)
+    (lambda ([x : Integer] [nrg : Random-Generator])
       (let ((scaled-x (+ (/ (+ low high) 2)
 			 (* (/ (- high low) int-range)
 			    x))))
 	(values scaled-x nrg)))))
 
+(: ilogbase (Nonnegative-Integer Nonnegative-Integer → Positive-Integer))
 (define (ilogbase b i)
   (if (< i b)
       1
       (+ 1 (ilogbase b (quotient i b)))))
-
-; sequences are nice
-
-; seed : (∪ Fixnum random-generator)
-(define (random-stream seed #:next (next-procedure random-generator-next))
-  (let loop ([gen (if (random-generator? seed) seed (make-random-generator seed))])
-    (let-values ([(next gen) (next-procedure gen)])
-      (stream-cons next (loop gen)))))
