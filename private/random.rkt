@@ -18,7 +18,10 @@
 	 random-generator-next
 	 random-generator-split
 	 random-integer
-	 random-real)
+	 random-real
+         random-stream)
+
+(require racket/stream)
 
 (struct random-generator (s1 s2) #:constructor-name really-make-random-generator)
 
@@ -74,7 +77,6 @@
 		  (really-make-random-generator (random-generator-s1 nrg)
 						new-s2)))))))
 
-
 ; The intervals are inclusive.
 
 (define (random-integer rg low high)
@@ -106,3 +108,10 @@
       1
       (+ 1 (ilogbase b (quotient i b)))))
 
+; sequences are nice
+
+; seed : (∪ Fixnum random-generator)
+(define (random-stream seed #:next (next-procedure random-generator-next))
+  (let loop ([gen (if (random-generator? seed) seed (make-random-generator seed))])
+    (let-values ([(next gen) (next-procedure gen)])
+      (stream-cons next (loop gen)))))
